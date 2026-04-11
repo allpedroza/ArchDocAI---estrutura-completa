@@ -284,33 +284,48 @@
 </main>
 
 <script>
-  // Provider → default model
+  // Provider -> default model
   const modelMap = { openai: 'gpt-4o', anthropic: 'claude-sonnet-4-6', custom: '' };
   document.getElementById('provider').addEventListener('change', e => {
     document.getElementById('model').value = modelMap[e.target.value] || '';
   });
 
-  const statusSteps = [
-    "Clonando repositório (shallow clone)...",
-    "Escaneando arquivos do projeto...",
-    "Enviando contexto para o LLM...",
-    "Aguardando análise de arquitetura...",
-    "Gerando diagrama e documentos...",
-  ];
+  let pollTimer = null;
 
-  let stepInterval;
-
-  function startStatusAnimation() {
-    let i = 0;
-    document.getElementById('status-text').textContent = statusSteps[0];
-    stepInterval = setInterval(() => {
-      i = Math.min(i + 1, statusSteps.length - 1);
-      document.getElementById('status-text').textContent = statusSteps[i];
-    }, 8000);
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
-  function stopStatusAnimation() {
-    clearInterval(stepInterval);
+  async function pollStatus(jobId) {
+    try {
+      const res = await fetch(`/api/status/${jobId}`);
+      if (!res.ok) throw new Error('Status check failed');
+      const job = await res.json();
+
+      // Update step text with real message from server
+      document.getElementById('status-text').textContent = job.step || '...';
+
+      if (job.status === 'done') {
+        stopPolling();
+        document.getElementById('status-box').style.display = 'none';
+        document.getElementById('submit-btn').disabled = false;
+        renderResults(job.result);
+      } else if (job.status === 'error') {
+        stopPolling();
+        document.getElementById('status-box').style.display = 'none';
+        document.getElementById('submit-btn').disabled = false;
+        const errorBox = document.getElementById('error-box');
+        errorBox.textContent = 'Erro: ' + (job.error || 'Erro desconhecido');
+        errorBox.style.display = 'block';
+      }
+    } catch (err) {
+      stopPolling();
+      document.getElementById('status-box').style.display = 'none';
+      document.getElementById('submit-btn').disabled = false;
+      const errorBox = document.getElementById('error-box');
+      errorBox.textContent = 'Erro ao verificar status: ' + err.message;
+      errorBox.style.display = 'block';
+    }
   }
 
   document.getElementById('analyze-form').addEventListener('submit', async e => {
@@ -324,25 +339,24 @@
     errorBox.style.display = 'none';
     results.style.display = 'none';
     statusBox.style.display = 'block';
-    startStatusAnimation();
+    document.getElementById('status-text').textContent = 'Enviando requisicao...';
 
     try {
       const fd = new FormData(e.target);
       const res = await fetch('/api/analyze', { method: 'POST', body: fd });
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.detail || res.statusText);
-      }
+      if (!res.ok) throw new Error(data.detail || res.statusText);
 
-      renderResults(data);
+      // Start polling every 3 seconds for real progress from server
+      pollTimer = setInterval(() => pollStatus(data.job_id), 3000);
+      pollStatus(data.job_id); // immediate first check
+
     } catch (err) {
-      errorBox.textContent = 'Erro: ' + err.message;
-      errorBox.style.display = 'block';
-    } finally {
-      stopStatusAnimation();
       statusBox.style.display = 'none';
       btn.disabled = false;
+      errorBox.textContent = 'Erro: ' + err.message;
+      errorBox.style.display = 'block';
     }
   });
 

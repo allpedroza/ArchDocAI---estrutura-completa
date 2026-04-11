@@ -154,14 +154,13 @@ class ArchitectureAnalyzer:
         )
 
     def _repair_json(self, text: str) -> dict:
-        """Best-effort repair of truncated JSON by balancing brackets."""
+        """Best-effort repair of truncated JSON using a stack to close in correct order."""
         start = text.find("{")
         if start == -1:
             raise ValueError("No JSON object found")
 
         chunk = text[start:]
-        depth_brace = 0
-        depth_bracket = 0
+        stack: list[str] = []  # tracks opening chars in order: '{' or '['
         in_string = False
         escape = False
 
@@ -177,24 +176,26 @@ class ArchitectureAnalyzer:
                 continue
             if in_string:
                 continue
-            if ch == "{":
-                depth_brace += 1
-            elif ch == "}":
-                depth_brace -= 1
-                if depth_brace == 0:
-                    # Found complete object
-                    return json.loads(chunk[: i + 1])
-            elif ch == "[":
-                depth_bracket += 1
-            elif ch == "]":
-                depth_bracket -= 1
 
-        # Truncated - close open structures
-        suffix = ""
-        if in_string:
-            suffix += '"'
-        suffix += "]" * max(depth_bracket, 0)
-        suffix += "}" * max(depth_brace, 0)
+            if ch == "{":
+                stack.append("{")
+            elif ch == "[":
+                stack.append("[")
+            elif ch == "}":
+                if stack and stack[-1] == "{":
+                    stack.pop()
+                if not stack:
+                    # Found the complete outermost object
+                    return json.loads(chunk[: i + 1])
+            elif ch == "]":
+                if stack and stack[-1] == "[":
+                    stack.pop()
+
+        # Truncated - close open structures in reverse order
+        suffix = '"' if in_string else ""
+        for opener in reversed(stack):
+            suffix += "}" if opener == "{" else "]"
+
         return json.loads(chunk + suffix)
 
     def _build_result(self, data: dict) -> AnalysisResult:
