@@ -11,15 +11,19 @@ Security & reliability:
 - Automatic cleanup of output folders older than 24h
 - Structured rotating log (console + file, JSON-lines format)
 - /health endpoint for load balancers and container orchestrators
+- Optional API auth via ARCHDOC_API_KEY env var (Bearer token)
+- Max concurrent jobs cap via MAX_CONCURRENT_JOBS env var
+- git_url validated to only allow https:// and git@ schemes
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -46,8 +50,14 @@ _ALLOWED_ORIGINS = _parse_origins(os.getenv("ALLOWED_ORIGINS", "*"))
 _MAX_REPO_SIZE_MB = int(os.getenv("MAX_REPO_SIZE_MB", "500"))
 _RATE_MAX = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "10"))
 _RATE_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
+_API_KEY = os.getenv("ARCHDOC_API_KEY", "")  # empty = auth disabled
+_MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "5"))
 
 _rate_limiter = RateLimiter(max_requests=_RATE_MAX, window_seconds=_RATE_WINDOW)
+_job_semaphore = threading.Semaphore(_MAX_CONCURRENT_JOBS)
+
+# Only allow https:// and git@ (SSH) URLs -- blocks file://, git://, etc.
+_GIT_URL_RE = re.compile(r"^(https?://|git@)\S+$")
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +76,7 @@ class JobStore:
                 "step": "Aguardando inicio...",
                 "result": None,
                 "error": None,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
             }
 
     def update(self, job_id: str, **kwargs) -> None:
@@ -79,7 +89,7 @@ class JobStore:
             return dict(self._jobs[job_id]) if job_id in self._jobs else None
 
     def purge_old(self, max_age_hours: int = 24) -> int:
-        cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         removed = 0
         with self._lock:
             stale = [jid for jid, j in self._jobs.items() if j["created_at"] < cutoff]
@@ -127,13 +137,13 @@ def _check_repo_size(git_url: str, job_id: str, extra: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def cleanup_old_output(output_root: Path, max_age_hours: int = 24) -> None:
-    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     removed = 0
     for folder in output_root.iterdir():
         if not folder.is_dir():
             continue
         try:
-            mtime = datetime.utcfromtimestamp(folder.stat().st_mtime)
+            mtime = datetime.fromtimestamp(folder.stat().st_mtime, timezone.utc)
             if mtime < cutoff:
                 shutil.rmtree(folder, ignore_errors=True)
                 removed += 1
@@ -157,9 +167,20 @@ def _run_analysis(
     git_branch: str,
     project_name: str,
     output_root: Path,
+    base_url: str | None = None,
 ) -> None:
     extra = {"job_id": job_id}
     tmp_dir = tempfile.mkdtemp(prefix="archdoc_")
+
+    acquired = _job_semaphore.acquire(blocking=False)
+    if not acquired:
+        _jobs.update(
+            job_id,
+            status="error",
+            step="Erro.",
+            error=f"Servidor ocupado: limite de {_MAX_CONCURRENT_JOBS} jobs concorrentes atingido. Tente novamente em instantes.",
+        )
+        return
 
     try:
         log.info("Job started - cloning %s", git_url, extra=extra)
@@ -210,7 +231,7 @@ def _run_analysis(
         from src.output import DocxGenerator, PdfGenerator
 
         # Thread-safe: LLMConfig built locally, never touches os.environ
-        config = LLMConfig(provider=provider, api_key=api_key, model=model)  # type: ignore
+        config = LLMConfig(provider=provider, api_key=api_key, model=model, base_url=base_url)  # type: ignore
         client = LLMClient(config=config)
 
         ctx = ProjectContext.from_path(str(project_root), project_name=inferred_name)
@@ -268,6 +289,7 @@ def _run_analysis(
         _jobs.update(job_id, status="error", step="Erro.", error=str(exc))
 
     finally:
+        _job_semaphore.release()
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -317,14 +339,21 @@ def create_app() -> FastAPI:
     @app.post("/api/analyze")
     async def analyze(
         request: Request,
-        provider: str = Form(...),
-        api_key: str = Form(...),
-        model: str = Form(...),
-        language: str = Form("pt"),
-        git_url: str = Form(...),
-        git_branch: str = Form(""),
-        project_name: str = Form(""),
+        provider: str = Form(..., max_length=20),
+        api_key: str = Form(..., max_length=512),
+        model: str = Form(..., max_length=100),
+        language: str = Form("pt", max_length=5),
+        git_url: str = Form(..., max_length=512),
+        git_branch: str = Form("", max_length=200),
+        project_name: str = Form("", max_length=200),
+        base_url: str = Form("", max_length=512),
     ):
+        # Optional Bearer token auth (only enforced when ARCHDOC_API_KEY is set)
+        if _API_KEY:
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer ") or auth_header[7:] != _API_KEY:
+                raise HTTPException(401, "Autenticacao necessaria: Bearer token invalido ou ausente.")
+
         # Rate limiting by IP
         client_ip = request.client.host if request.client else "unknown"
         allowed, retry_after = _rate_limiter.check(client_ip)
@@ -339,8 +368,20 @@ def create_app() -> FastAPI:
 
         if provider not in ("openai", "anthropic", "custom"):
             raise HTTPException(400, "provider deve ser openai, anthropic ou custom")
-        if not git_url.strip():
-            raise HTTPException(400, "git_url e obrigatorio")
+
+        # Validate git URL scheme -- reject file://, git://, local paths, etc.
+        if not git_url.strip() or not _GIT_URL_RE.match(git_url.strip()):
+            raise HTTPException(
+                400,
+                "git_url invalida: use https:// ou git@ (SSH). Esquemas file://, git:// e caminhos locais nao sao permitidos.",
+            )
+
+        # Require base_url when provider is custom
+        if provider == "custom" and not base_url.strip():
+            raise HTTPException(
+                400,
+                "base_url e obrigatorio quando provider=custom (ex: http://localhost:11434/v1).",
+            )
 
         remaining = _rate_limiter.remaining(client_ip)
         log.info("New job request from %s - %s (remaining quota: %d)", client_ip, git_url, remaining)
@@ -353,7 +394,7 @@ def create_app() -> FastAPI:
 
         thread = threading.Thread(
             target=_run_analysis,
-            args=(job_id, provider, api_key, model, language, git_url, git_branch, project_name, output_root),
+            args=(job_id, provider, api_key, model, language, git_url, git_branch, project_name, output_root, base_url.strip() or None),
             daemon=True,
         )
         thread.start()

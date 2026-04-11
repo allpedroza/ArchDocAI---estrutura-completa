@@ -226,3 +226,109 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "remaining" in data
         assert "limit" in data
+
+
+# ---------------------------------------------------------------------------
+# git_url validation
+# ---------------------------------------------------------------------------
+
+class TestGitUrlValidation:
+    def _post_analyze(self, git_url: str, extra_data: dict | None = None):
+        from fastapi.testclient import TestClient
+        from web.app import create_app
+        app = create_app()
+        client = TestClient(app)
+        data = {
+            "provider": "openai",
+            "api_key": "sk-test",
+            "model": "gpt-4o",
+            "git_url": git_url,
+        }
+        if extra_data:
+            data.update(extra_data)
+        return client.post("/api/analyze", data=data)
+
+    def test_https_url_is_accepted(self):
+        resp = self._post_analyze("https://github.com/user/repo.git")
+        # 202 = queued, not 400 validation error
+        assert resp.status_code == 202
+
+    def test_ssh_url_is_accepted(self):
+        resp = self._post_analyze("git@github.com:user/repo.git")
+        assert resp.status_code == 202
+
+    def test_file_scheme_is_rejected(self):
+        resp = self._post_analyze("file:///etc/passwd")
+        assert resp.status_code == 400
+
+    def test_local_path_is_rejected(self):
+        resp = self._post_analyze("/home/user/myrepo")
+        assert resp.status_code == 400
+
+    def test_empty_url_is_rejected(self):
+        resp = self._post_analyze("   ")
+        assert resp.status_code == 400
+
+    def test_custom_provider_without_base_url_is_rejected(self):
+        resp = self._post_analyze(
+            "https://github.com/user/repo.git",
+            {"provider": "custom"},
+        )
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Mermaid colors
+# ---------------------------------------------------------------------------
+
+class TestMermaidColors:
+    def _make_result(self, layers):
+        from src.analysis.analyzer import AnalysisResult
+        return AnalysisResult(
+            raw_json={},
+            project_name="Test",
+            description="",
+            tech_stack=[],
+            layers=layers,
+            good_practices=[],
+            improvement_points=[],
+            validation_questions=[],
+        )
+
+    def test_mermaid_includes_style_for_each_layer(self):
+        from src.analysis.diagram import DiagramGenerator
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = DiagramGenerator(output_dir=tmp)
+            result = self._make_result([
+                {"id": "l1", "name": "Ingestion", "color": "#2d6a4f", "components": [], "connections_to": []},
+                {"id": "l2", "name": "Processing", "color": "#457b9d", "components": [], "connections_to": []},
+            ])
+            mermaid = gen.generate_mermaid(result)
+        assert "style l1 fill:#2d6a4f" in mermaid
+        assert "style l2 fill:#457b9d" in mermaid
+
+    def test_mermaid_components_get_tinted_style(self):
+        from src.analysis.diagram import DiagramGenerator
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = DiagramGenerator(output_dir=tmp)
+            result = self._make_result([
+                {"id": "l1", "name": "Layer", "color": "#2d6a4f",
+                 "components": [{"name": "Scanner", "description": "", "tech": "", "type": "process"}],
+                 "connections_to": []},
+            ])
+            mermaid = gen.generate_mermaid(result)
+        assert "style l1_scanner" in mermaid
+        assert "#2d6a4f99" in mermaid
+
+    def test_mermaid_fallback_color_when_missing(self):
+        from src.analysis.diagram import DiagramGenerator, DEFAULT_COLORS
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = DiagramGenerator(output_dir=tmp)
+            result = self._make_result([
+                {"id": "l1", "name": "Layer", "color": None, "components": [], "connections_to": []},
+            ])
+            mermaid = gen.generate_mermaid(result)
+        assert f"style l1 fill:{DEFAULT_COLORS[0]}" in mermaid

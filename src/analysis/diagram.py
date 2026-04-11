@@ -129,23 +129,30 @@ class DiagramGenerator:
         return str(output_path)
 
     def generate_mermaid(self, result: AnalysisResult) -> str:
-        """Return a Mermaid flowchart markup string."""
+        """Return a Mermaid flowchart markup string with per-layer colors."""
         lines = ["flowchart TD"]
         prev_id = None
+        style_lines: list[str] = []
 
-        for layer in result.layers:
+        for i, layer in enumerate(result.layers):
             lid = layer["id"]
             label = layer["name"].replace('"', "'")
             lines.append(f'    {lid}["{label}"]')
+
+            # Apply the layer color defined by the LLM (falls back to DEFAULT_COLORS)
+            color = layer.get("color") or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+            style_lines.append(f"    style {lid} fill:{color},stroke:#ffffff22,color:#ffffff")
 
             for comp in layer.get("components", []):
                 cid = lid + "_" + comp["name"].replace(" ", "_").lower()[:15]
                 clabel = comp["name"].replace('"', "'")
                 lines.append(f'    {cid}["{clabel}"]')
                 lines.append(f"    {lid} --> {cid}")
+                # Components get a lighter tint of the layer color
+                style_lines.append(f"    style {cid} fill:{color}99,stroke:#ffffff22,color:#ffffff")
 
             if prev_id:
                 lines.append(f"    {prev_id} --> {lid}")
             prev_id = lid
 
-        return "\n".join(lines)
+        return "\n".join(lines + style_lines)

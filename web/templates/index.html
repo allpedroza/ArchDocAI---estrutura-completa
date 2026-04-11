@@ -207,6 +207,11 @@
       <label>API Key</label>
       <input type="password" name="api_key" placeholder="sk-...  ou  sk-ant-..." required />
 
+      <div id="custom-base-url-row" style="display:none">
+        <label>Base URL (Custom)</label>
+        <input type="url" name="base_url" id="base_url" placeholder="http://localhost:11434/v1" maxlength="512" />
+      </div>
+
       <label>Idioma de saída</label>
       <select name="language">
         <option value="pt">Português Brasileiro</option>
@@ -286,10 +291,13 @@
 </main>
 
 <script>
-  // Provider -> default model
+  // Provider -> default model + show/hide base_url row
   const modelMap = { openai: 'gpt-4o', anthropic: 'claude-sonnet-4-6', custom: '' };
   document.getElementById('provider').addEventListener('change', e => {
     document.getElementById('model').value = modelMap[e.target.value] || '';
+    const isCustom = e.target.value === 'custom';
+    document.getElementById('custom-base-url-row').style.display = isCustom ? '' : 'none';
+    document.getElementById('base_url').required = isCustom;
   });
 
   let pollTimer = null;
