@@ -15,6 +15,7 @@ and optionally job_id when passed as extra={"job_id": "..."}.
 
 import json
 import logging
+import logging.handlers
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,9 +88,13 @@ def setup_logging(log_dir: str = "./logs", level: str = "INFO") -> None:
     ch.setFormatter(ConsoleFormatter())
     root.addHandler(ch)
 
-    # File (JSON lines, one log per day)
-    today = datetime.now().strftime("%Y-%m-%d")
-    fh = logging.FileHandler(log_path / f"archdoc_{today}.log", encoding="utf-8")
+    # File: rotating, max 10 MB per file, keep 7 backups
+    fh = logging.handlers.RotatingFileHandler(
+        log_path / "archdoc.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=7,
+        encoding="utf-8",
+    )
     fh.setFormatter(JsonFormatter())
     root.addHandler(fh)
 

@@ -5,11 +5,50 @@ a structured architecture description + validation Q&A.
 
 import json
 from dataclasses import dataclass, field
+from typing import Literal
+
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
 from .llm_client import LLMClient
 from ..ingestion.context import ProjectContext
 from src.logger import get_logger
 
 log = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic schema - validates LLM response before trusting it
+# ---------------------------------------------------------------------------
+
+class ComponentSchema(BaseModel):
+    name: str
+    description: str = ""
+    tech: str = ""
+    type: Literal["source", "process", "store", "api", "ui", "infra"] = "process"
+
+class LayerSchema(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    color: str = "#4578a0"
+    components: list[ComponentSchema] = Field(default_factory=list)
+    connections_to: list[str] = Field(default_factory=list)
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v: str) -> str:
+        if not v.startswith("#") or len(v) not in (4, 7):
+            return "#4578a0"
+        return v
+
+class LLMResponseSchema(BaseModel):
+    project_name: str = "Unknown Project"
+    description: str = ""
+    tech_stack: list[str] = Field(default_factory=list)
+    layers: list[LayerSchema] = Field(default_factory=list)
+    good_practices: list[str] = Field(default_factory=list)
+    improvement_points: list[str] = Field(default_factory=list)
+    validation_questions: list[str] = Field(default_factory=list)
 
 SYSTEM_PROMPT_PT = """Você é um arquiteto de dados e software sênior especialista em documentação técnica.
 Sua função é analisar projetos de engenharia e produzir:
@@ -208,13 +247,29 @@ class ArchitectureAnalyzer:
         return json.loads(chunk + suffix)
 
     def _build_result(self, data: dict) -> AnalysisResult:
-        return AnalysisResult(
-            raw_json=data,
-            project_name=data.get("project_name", "Unknown Project"),
-            description=data.get("description", ""),
-            tech_stack=data.get("tech_stack", []),
-            layers=data.get("layers", []),
-            good_practices=data.get("good_practices", []),
-            improvement_points=data.get("improvement_points", []),
-            validation_questions=data.get("validation_questions", []),
-        )
+        try:
+            validated = LLMResponseSchema.model_validate(data)
+            log.info("Pydantic validation passed for LLM response")
+            layers = [l.model_dump() for l in validated.layers]
+            return AnalysisResult(
+                raw_json=data,
+                project_name=validated.project_name,
+                description=validated.description,
+                tech_stack=validated.tech_stack,
+                layers=layers,
+                good_practices=validated.good_practices,
+                improvement_points=validated.improvement_points,
+                validation_questions=validated.validation_questions,
+            )
+        except ValidationError as exc:
+            log.warning("Pydantic validation found issues - falling back to safe defaults: %s", exc)
+            return AnalysisResult(
+                raw_json=data,
+                project_name=data.get("project_name", "Unknown Project"),
+                description=data.get("description", ""),
+                tech_stack=data.get("tech_stack", []),
+                layers=data.get("layers", []),
+                good_practices=data.get("good_practices", []),
+                improvement_points=data.get("improvement_points", []),
+                validation_questions=data.get("validation_questions", []),
+            )

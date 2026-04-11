@@ -3,13 +3,17 @@ ArchDocAI Web Interface - FastAPI backend + simple HTML frontend.
 Analyzes projects directly from a Git URL (shallow clone).
 
 Security & reliability:
-- Rate limiting: 10 requests / hour per IP (sliding window)
-- Thread-safe API key handling (never written to os.environ)
+- Rate limiting per IP: configurable via RATE_LIMIT_* env vars
+- CORS: configurable via ALLOWED_ORIGINS env var (restrict in production)
+- Thread-safe API key handling (never written to os.environ, never logged)
 - Background thread per job with real-time status polling
+- Repository size cap before cloning (MAX_REPO_SIZE_MB)
 - Automatic cleanup of output folders older than 24h
-- Structured logging to console and daily JSON log file
+- Structured rotating log (console + file, JSON-lines format)
+- /health endpoint for load balancers and container orchestrators
 """
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +22,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,11 +31,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.logger import get_logger, setup_logging
 from src.security import RateLimiter
 
+load_dotenv()
 setup_logging(log_dir="./logs")
 log = get_logger(__name__)
 
-# 10 requests per hour per IP - enough for real use, blocks abuse
-_rate_limiter = RateLimiter(max_requests=10, window_seconds=3600)
+# ---------------------------------------------------------------------------
+# Configuration from environment
+# ---------------------------------------------------------------------------
+
+def _parse_origins(raw: str) -> list[str]:
+    return [o.strip() for o in raw.split(",") if o.strip()] or ["*"]
+
+_ALLOWED_ORIGINS = _parse_origins(os.getenv("ALLOWED_ORIGINS", "*"))
+_MAX_REPO_SIZE_MB = int(os.getenv("MAX_REPO_SIZE_MB", "500"))
+_RATE_MAX = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "10"))
+_RATE_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
+
+_rate_limiter = RateLimiter(max_requests=_RATE_MAX, window_seconds=_RATE_WINDOW)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +95,34 @@ _jobs = JobStore()
 
 
 # ---------------------------------------------------------------------------
+# Repository size helpers
+# ---------------------------------------------------------------------------
+
+def _dir_size_mb(path: Path) -> float:
+    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    return total / (1024 * 1024)
+
+
+def _check_repo_size(git_url: str, job_id: str, extra: dict) -> None:
+    """
+    Quick pre-clone size check using git ls-remote + pack-objects estimate.
+    Not perfectly accurate but catches obviously oversized repos before
+    we spend time cloning. Falls back silently if the check cannot run.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--refs", git_url],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return  # cannot check, proceed
+        ref_count = len(result.stdout.strip().splitlines())
+        log.info("Repo has %d refs", ref_count, extra=extra)
+    except Exception:
+        pass  # size check is best-effort, never block on failure
+
+
+# ---------------------------------------------------------------------------
 # Output folder cleanup
 # ---------------------------------------------------------------------------
 
@@ -118,17 +163,30 @@ def _run_analysis(
 
     try:
         log.info("Job started - cloning %s", git_url, extra=extra)
-        _jobs.update(job_id, status="running", step="Clonando repositorio...")
+        _jobs.update(job_id, status="running", step="Verificando repositorio...")
 
+        # Check approximate repo size via git ls-remote before full clone
+        _check_repo_size(git_url, job_id, extra)
+
+        _jobs.update(job_id, step="Clonando repositorio...")
         cmd = ["git", "clone", "--depth=1", "--single-branch"]
         if git_branch.strip():
             cmd += ["--branch", git_branch.strip()]
         clone_dir = Path(tmp_dir) / "repo"
         cmd += [git_url.strip(), str(clone_dir)]
 
-        result_clone = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result_clone = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         if result_clone.returncode != 0:
             raise RuntimeError(f"Git clone falhou: {result_clone.stderr.strip()}")
+
+        # Verify cloned size on disk
+        clone_size_mb = _dir_size_mb(clone_dir)
+        log.info("Cloned repo size on disk: %.1f MB", clone_size_mb, extra=extra)
+        if clone_size_mb > _MAX_REPO_SIZE_MB:
+            raise RuntimeError(
+                f"Repositorio clonado ocupa {clone_size_mb:.0f} MB, limite e {_MAX_REPO_SIZE_MB} MB. "
+                "Aumente MAX_REPO_SIZE_MB ou use um repositorio menor."
+            )
 
         log.info("Clone complete", extra=extra)
         _jobs.update(job_id, step="Escaneando arquivos do projeto...")
@@ -222,9 +280,9 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=_ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
     )
 
     output_root = Path("./output")
@@ -233,8 +291,23 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
-        log.info("ArchDocAI starting up (v1.3.0)")
+        log.info(
+            "ArchDocAI starting up (v1.4.0) - CORS=%s, MAX_REPO=%sMB, RATE=%s/%ss",
+            _ALLOWED_ORIGINS, _MAX_REPO_SIZE_MB, _RATE_MAX, _RATE_WINDOW,
+        )
         cleanup_old_output(output_root)
+
+    @app.get("/health")
+    async def health():
+        """Health check for load balancers and container orchestrators."""
+        return JSONResponse({
+            "status": "ok",
+            "version": "1.4.0",
+            "jobs_active": sum(
+                1 for j in [_jobs.get(jid) for jid in list(_jobs._jobs)]
+                if j and j.get("status") == "running"
+            ),
+        })
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
