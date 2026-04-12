@@ -84,9 +84,9 @@ IMPORTANT_NAME_PATTERNS = [
     ("readme", 6), ("requirements", 6),
 ]
 
-MAX_FILE_BYTES = 50_000   # 50KB per file to avoid flooding the LLM context
+MAX_FILE_BYTES = 8_000    # ~2k tokens per file; keeps total prompt manageable
 MIN_FILE_BYTES = 1        # Skip truly empty files only
-MAX_FILES = 100           # Raised from 80 to capture more of large repos
+MAX_FILES = 50            # Top-50 highest-priority files
 
 
 @dataclass

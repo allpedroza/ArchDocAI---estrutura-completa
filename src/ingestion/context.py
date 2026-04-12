@@ -31,29 +31,55 @@ class ProjectContext:
             files=files,
         )
 
+    # ~7 500 tokens input budget — leaves room for system prompt + JSON output
+    # within the default 10 000 tok/min org rate limit.
+    # Override via subclass or monkey-patch for orgs with higher limits.
+    MAX_PROMPT_CHARS: int = 28_000
+
     def to_llm_prompt(self, language: str = "pt") -> str:
-        """Serialize the project context into a single prompt string for the LLM."""
+        """Serialize the project context into a single prompt string for the LLM.
+
+        Hard-caps total size at MAX_PROMPT_CHARS: drops lowest-priority files
+        once the budget is exhausted and records how many were omitted.
+        """
         lang_instructions = {
             "pt": "Responda em português brasileiro.",
             "en": "Respond in English.",
         }
         lang_note = lang_instructions.get(language, lang_instructions["pt"])
 
-        sections = [
+        header = "\n".join([
             f"# Project: {self.project_name}",
             f"\n{lang_note}",
             "\n## Directory Structure\n```\n" + self.directory_tree + "\n```",
             "\n## Source Files\n",
-        ]
+        ])
+
+        budget = self.MAX_PROMPT_CHARS - len(header) - 200  # 200 chars safety margin
+        file_sections: list[str] = []
+        omitted = 0
 
         for f in self.files:
             trunc_note = " *(truncated)*" if f.truncated else ""
-            sections.append(
+            block = (
                 f"### `{f.relative_path}` ({f.language}){trunc_note}\n"
                 f"```{f.language.lower()}\n{f.content}\n```\n"
             )
+            if len(block) <= budget:
+                file_sections.append(block)
+                budget -= len(block)
+            else:
+                omitted += 1
 
-        return "\n".join(sections)
+        if omitted:
+            omit_note = (
+                f"\n> ⚠️ {omitted} arquivo(s) omitido(s) por limite de contexto (prompt muito grande).\n"
+                if language == "pt" else
+                f"\n> ⚠️ {omitted} file(s) omitted due to context size limit.\n"
+            )
+            file_sections.append(omit_note)
+
+        return header + "\n".join(file_sections)
 
     def summary(self) -> dict:
         from collections import Counter

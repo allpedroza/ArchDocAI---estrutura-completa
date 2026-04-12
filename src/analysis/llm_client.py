@@ -19,8 +19,9 @@ log = get_logger(__name__)
 LLMProvider = Literal["openai", "anthropic", "custom"]
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 2.0  # seconds, doubles each attempt
+_MAX_RETRIES = 4
+_BACKOFF_BASE = 2.0      # seconds, doubles each attempt for 5xx
+_RATE_LIMIT_WAIT = 62.0  # seconds to wait on 429 (rate window is 60s)
 
 
 @dataclass
@@ -68,7 +69,11 @@ class LLMClient:
                     log.error("LLM call failed (non-retryable): %s", type(exc).__name__)
                     raise
 
-                wait = _BACKOFF_BASE ** (attempt - 1)
+                if status == 429:
+                    # Rate limit: wait out the full rate window before retrying
+                    wait = _RATE_LIMIT_WAIT
+                else:
+                    wait = _BACKOFF_BASE ** (attempt - 1)
                 log.warning(
                     "LLM call failed (attempt %d/%d, status %s) - retrying in %.1fs",
                     attempt, _MAX_RETRIES, status, wait,
