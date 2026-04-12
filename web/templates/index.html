@@ -174,17 +174,116 @@
     .download-links a.pdf { background: #6a2d7a; }
     .download-links a.png { background: var(--green); }
 
+    /* ── Hero ───────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, #0d1b2e 0%, #1d3557 60%, #0d1117 100%);
+      padding: 4rem 2rem 3.5rem;
+      text-align: center;
+      border-bottom: 1px solid #1d3557;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 60% at 50% 0%, #4578a022 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-block;
+      background: #4578a022;
+      border: 1px solid #4578a055;
+      border-radius: 20px;
+      padding: 0.3rem 1rem;
+      font-size: 0.75rem;
+      color: #aac4e0;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+    .hero h1 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 800;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+      color: #e6edf3;
+      margin-bottom: 1.1rem;
+    }
+    .hero h1 span {
+      background: linear-gradient(90deg, #4578a0, #7db9e8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: clamp(0.95rem, 2vw, 1.1rem);
+      color: #8b949e;
+      max-width: 620px;
+      margin: 0 auto 2rem;
+      line-height: 1.65;
+    }
+    .hero-pills {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 0.5rem;
+    }
+    .hero-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.8rem;
+      color: #aac4e0;
+    }
+    .hero-pill svg { opacity: 0.7; }
+
     @media (max-width: 600px) {
       .row, .two-col { grid-template-columns: 1fr; }
+      .hero { padding: 2.5rem 1.2rem 2rem; }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <h1>ArchDocAI</h1>
-  <p>Conecte seu repositório Git - o AI lê, documenta e gera diagrama da arquitetura automaticamente</p>
+<header style="background:#0d1b2e; padding:0.9rem 2rem; display:flex; align-items:center; gap:0.75rem; border-bottom:1px solid #1d3557;">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4578a0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8h10M7 12h6"/></svg>
+  <span style="font-weight:700;font-size:1rem;letter-spacing:-0.01em;">ArchDocAI</span>
+  <span style="margin-left:auto;font-size:0.75rem;color:#4578a0;border:1px solid #1d3557;border-radius:12px;padding:0.15rem 0.6rem;">v1.4</span>
 </header>
+
+<section class="hero">
+  <div class="hero-badge">✦ Powered by LLM · OpenAI · Anthropic · Self-hosted</div>
+  <h1>Transforme qualquer repositório<br>em <span>documentação de arquitetura</span><br>em minutos.</h1>
+  <p class="hero-sub">
+    Cole o link do seu Git — a IA lê o código, mapeia as camadas,
+    desenha o diagrama e exporta <strong style="color:#e6edf3">PDF e DOCX</strong> prontos para apresentar.
+    Sem configuração. Sem templates. Sem esforço manual.
+  </p>
+  <div class="hero-pills">
+    <div class="hero-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+      Diagrama gerado automaticamente
+    </div>
+    <div class="hero-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+      Exporta PDF · DOCX · PNG
+    </div>
+    <div class="hero-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+      Qualquer linguagem de programação
+    </div>
+    <div class="hero-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+      OpenAI · Anthropic · Self-hosted
+    </div>
+  </div>
+</section>
 
 <main>
   <form id="analyze-form">
