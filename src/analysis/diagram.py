@@ -1,194 +1,85 @@
 """
 Layer 2 - Analysis: Generate architecture diagrams from AnalysisResult.
 
-Primary renderer: diagrams (diagrams.mingrammer.com) — icon-based professional output.
-Fallback renderer: matplotlib — when diagrams/graphviz is unavailable.
+Primary renderer: matplotlib — full layout control, professional horizontal-band design.
+Secondary renderer: diagrams (mingrammer) — opt-in via generate_png(use_diagrams=True).
 
 Also exports Mermaid markup for embedding in docs.
 """
 
 import math
-import os
-import tempfile
 import textwrap
 from pathlib import Path
 from dataclasses import dataclass
 from .analyzer import AnalysisResult
 
 # ---------------------------------------------------------------------------
-# Icon map: tech keyword -> (module_path, class_name)
-# Longest match wins (e.g. "postgresql" beats "post")
+# Color palette – one accent per layer (cycles if more layers than colors)
 # ---------------------------------------------------------------------------
-_ICON_MAP: dict[str, tuple[str, str]] = {
-    # AWS Storage
-    "s3": ("diagrams.aws.storage", "S3"),
-    "glacier": ("diagrams.aws.storage", "S3Glacier"),
-    # AWS Compute
-    "lambda": ("diagrams.aws.compute", "Lambda"),
-    "ec2": ("diagrams.aws.compute", "EC2"),
-    "ecs": ("diagrams.aws.compute", "ECS"),
-    "eks": ("diagrams.aws.compute", "EKS"),
-    "fargate": ("diagrams.aws.compute", "Fargate"),
-    "sagemaker": ("diagrams.aws.ml", "Sagemaker"),
-    "glue": ("diagrams.aws.analytics", "Glue"),
-    "athena": ("diagrams.aws.analytics", "Athena"),
-    "kinesis": ("diagrams.aws.analytics", "KinesisDataStreams"),
-    "redshift": ("diagrams.aws.analytics", "Redshift"),
-    "dynamodb": ("diagrams.aws.database", "Dynamodb"),
-    "rds": ("diagrams.aws.database", "RDS"),
-    "aurora": ("diagrams.aws.database", "Aurora"),
-    "elasticache": ("diagrams.aws.database", "ElastiCache"),
-    "sqs": ("diagrams.aws.integration", "SQS"),
-    "sns": ("diagrams.aws.integration", "SNS"),
-    "api gateway": ("diagrams.aws.network", "APIGateway"),
-    "cloudfront": ("diagrams.aws.network", "CloudFront"),
-    "route53": ("diagrams.aws.network", "Route53"),
-    "vpc": ("diagrams.aws.network", "VPC"),
-    "load balancer": ("diagrams.aws.network", "ELB"),
-    "elb": ("diagrams.aws.network", "ELB"),
-    "alb": ("diagrams.aws.network", "ALB"),
-    "cloudwatch": ("diagrams.aws.management", "Cloudwatch"),
-    "step functions": ("diagrams.aws.integration", "StepFunctions"),
-    "eventbridge": ("diagrams.aws.integration", "Eventbridge"),
-    # GCP
-    "bigquery": ("diagrams.gcp.analytics", "BigQuery"),
-    "pubsub": ("diagrams.gcp.analytics", "PubSub"),
-    "pub/sub": ("diagrams.gcp.analytics", "PubSub"),
-    "dataflow": ("diagrams.gcp.analytics", "Dataflow"),
-    "cloud run": ("diagrams.gcp.compute", "Run"),
-    "gke": ("diagrams.gcp.compute", "GKE"),
-    "cloud storage": ("diagrams.gcp.storage", "GCS"),
-    "gcs": ("diagrams.gcp.storage", "GCS"),
-    "firestore": ("diagrams.gcp.database", "Firestore"),
-    "cloud sql": ("diagrams.gcp.database", "SQL"),
-    "spanner": ("diagrams.gcp.database", "Spanner"),
-    # Azure
-    "blob": ("diagrams.azure.storage", "BlobStorage"),
-    "cosmos": ("diagrams.azure.database", "CosmosDb"),
-    "azure sql": ("diagrams.azure.database", "SQLDatabases"),
-    "service bus": ("diagrams.azure.integration", "ServiceBus"),
-    "event hub": ("diagrams.azure.analytics", "EventHubs"),
-    "azure function": ("diagrams.azure.compute", "FunctionApps"),
-    "aks": ("diagrams.azure.compute", "KubernetesServices"),
-    # On-prem databases
-    "postgresql": ("diagrams.onprem.database", "Postgresql"),
-    "postgres": ("diagrams.onprem.database", "Postgresql"),
-    "mysql": ("diagrams.onprem.database", "Mysql"),
-    "mongodb": ("diagrams.onprem.database", "MongoDB"),
-    "mongo": ("diagrams.onprem.database", "MongoDB"),
-    "cassandra": ("diagrams.onprem.database", "Cassandra"),
-    "elasticsearch": ("diagrams.onprem.search", "Elasticsearch"),
-    "elastic": ("diagrams.onprem.search", "Elasticsearch"),
-    "redis": ("diagrams.onprem.inmemory", "Redis"),
-    "memcached": ("diagrams.onprem.inmemory", "Memcached"),
-    # Queues / streaming
-    "kafka": ("diagrams.onprem.queue", "Kafka"),
-    "rabbitmq": ("diagrams.onprem.queue", "Rabbitmq"),
-    "celery": ("diagrams.onprem.queue", "Celery"),
-    "activemq": ("diagrams.onprem.queue", "ActiveMQ"),
-    # Orchestration / infra
-    "kubernetes": ("diagrams.onprem.container", "K8S"),
-    "k8s": ("diagrams.onprem.container", "K8S"),
-    "docker": ("diagrams.onprem.container", "Docker"),
-    "nginx": ("diagrams.onprem.network", "Nginx"),
-    "apache": ("diagrams.onprem.network", "Apache"),
-    "haproxy": ("diagrams.onprem.network", "HAProxy"),
-    "terraform": ("diagrams.onprem.iac", "Terraform"),
-    "ansible": ("diagrams.onprem.iac", "Ansible"),
-    "jenkins": ("diagrams.onprem.ci", "Jenkins"),
-    "gitlab": ("diagrams.onprem.vcs", "Gitlab"),
-    "github": ("diagrams.onprem.vcs", "Github"),
-    "grafana": ("diagrams.onprem.monitoring", "Grafana"),
-    "prometheus": ("diagrams.onprem.monitoring", "Prometheus"),
-    # Programming languages
-    "python": ("diagrams.programming.language", "Python"),
-    "javascript": ("diagrams.programming.language", "Javascript"),
-    "typescript": ("diagrams.programming.language", "Typescript"),
-    "go": ("diagrams.programming.language", "Go"),
-    "java": ("diagrams.programming.language", "Java"),
-    "rust": ("diagrams.programming.language", "Rust"),
-    # Frameworks / runtime
-    "fastapi": ("diagrams.programming.framework", "FastAPI"),
-    "flask": ("diagrams.programming.framework", "Flask"),
-    "django": ("diagrams.programming.framework", "Django"),
-    "react": ("diagrams.programming.framework", "React"),
-    "vue": ("diagrams.programming.framework", "Vue"),
-    "angular": ("diagrams.programming.framework", "Angular"),
-    "spring": ("diagrams.programming.framework", "Spring"),
-    # Networking
-    "internet": ("diagrams.onprem.network", "Internet"),
-    "firewall": ("diagrams.onprem.network", "Pfsense"),
-    # SaaS / generic
-    "git": ("diagrams.onprem.vcs", "Git"),
-    "airflow": ("diagrams.onprem.workflow", "Airflow"),
-    "spark": ("diagrams.onprem.analytics", "Spark"),
-    "flink": ("diagrams.onprem.analytics", "Flink"),
-    "dbt": ("diagrams.onprem.analytics", "DBT"),
-    "mlflow": ("diagrams.onprem.mlops", "Mlflow"),
-}
-
-# Fallback by component type field
-_TYPE_FALLBACK: dict[str, tuple[str, str]] = {
-    "source": ("diagrams.onprem.queue", "Kafka"),
-    "store": ("diagrams.onprem.database", "Postgresql"),
-    "process": ("diagrams.programming.language", "Python"),
-    "api": ("diagrams.onprem.network", "Nginx"),
-    "ui": ("diagrams.programming.framework", "React"),
-    "infra": ("diagrams.onprem.container", "Docker"),
-    "ml": ("diagrams.aws.ml", "Sagemaker"),
-    "analytics": ("diagrams.onprem.analytics", "Spark"),
-}
-
-# Pastel layer colors for diagrams cluster borders
-_CLUSTER_COLORS = [
-    "#1a6b4a", "#1a3a5c", "#5a2d82", "#8b3a00",
-    "#c0392b", "#2c7a7b", "#6d4c41", "#155799",
-]
-# Public alias kept for backwards compatibility with existing tests/code
-DEFAULT_COLORS = _CLUSTER_COLORS
-
-# ---------------------------------------------------------------------------
-# Matplotlib fallback constants
-# ---------------------------------------------------------------------------
-_MAX_PER_ROW = 4
-_COMP_H = 1.6
-_COMP_ROW_GAP = 0.2
-_TITLE_H = 0.75
-_LAYER_PAD = 0.4
-_MARGIN_TOP = 0.7
-_FIG_W = 18.0
-_DPI = 160
-_BG = "#111827"
-_TEXT = "#f0f4f8"
-_SUBTEXT = "#94a3b8"
-_MPL_COLORS = [
-    "#1a6b4a", "#1a3a5c", "#5a2d82", "#8b3a00",
-    "#c0392b", "#2c7a7b", "#6d4c41",
+DEFAULT_COLORS = [
+    "#2563eb",  # blue
+    "#16a34a",  # green
+    "#9333ea",  # purple
+    "#ea580c",  # orange
+    "#dc2626",  # red
+    "#0891b2",  # cyan
+    "#854d0e",  # amber-brown
+    "#475569",  # slate
 ]
 
+# Light pastel fills derived from accent colors (hex 18% opacity approximation)
+_PASTEL = [
+    "#dbeafe",  # blue-100
+    "#dcfce7",  # green-100
+    "#f3e8ff",  # purple-100
+    "#ffedd5",  # orange-100
+    "#fee2e2",  # red-100
+    "#cffafe",  # cyan-100
+    "#fef3c7",  # amber-100
+    "#f1f5f9",  # slate-100
+]
 
-def _resolve_icon(comp: dict):
-    """Return (module_path, class_name) for a component, or None if no match."""
-    haystack = (comp.get("tech", "") + " " + comp.get("name", "")).lower()
-    # longest match wins
-    best_key = ""
-    best_val = None
-    for kw, val in _ICON_MAP.items():
-        if kw in haystack and len(kw) > len(best_key):
-            best_key = kw
-            best_val = val
-    if best_val:
-        return best_val
-    # fallback by component type
-    ctype = comp.get("type", "").lower()
-    return _TYPE_FALLBACK.get(ctype)
+# Tech badge colors (text on white)
+_TECH_COLORS = [
+    "#1d4ed8", "#15803d", "#7e22ce", "#c2410c",
+    "#b91c1c", "#0e7490", "#92400e", "#334155",
+]
 
+# Short tech abbreviations shown as colored badge inside component card
+_TECH_ABBR: dict[str, str] = {
+    "python": "PY", "javascript": "JS", "typescript": "TS",
+    "go": "GO", "java": "JV", "rust": "RS", "c++": "C+",
+    "ruby": "RB", "scala": "SC", "kotlin": "KT", "swift": "SW",
+    "fastapi": "FA", "django": "DJ", "flask": "FL", "spring": "SP",
+    "react": "RE", "vue": "VU", "angular": "NG", "svelte": "SV",
+    "postgresql": "PG", "postgres": "PG", "mysql": "MY", "sqlite": "SQ",
+    "mongodb": "MG", "cassandra": "CA", "redis": "RD", "dynamodb": "DY",
+    "elasticsearch": "ES", "kafka": "KF", "rabbitmq": "MQ", "celery": "CL",
+    "kubernetes": "K8", "k8s": "K8", "docker": "DK", "terraform": "TF",
+    "aws": "AW", "gcp": "GC", "azure": "AZ", "s3": "S3",
+    "lambda": "λ", "airflow": "AF", "spark": "SP", "flink": "FL",
+    "nginx": "NX", "apache": "AP", "graphql": "GQ", "rest": "RS",
+    "grpc": "gR", "protobuf": "PB", "jwt": "JW", "oauth": "OA",
+    "mlflow": "ML", "pytorch": "PT", "tensorflow": "TF", "sklearn": "SK",
+    "pandas": "PD", "numpy": "NP", "dbt": "DB", "bigquery": "BQ",
+    "redshift": "RS", "snowflake": "SF", "databricks": "DB",
+}
 
-def _import_node(module_path: str, class_name: str):
-    """Dynamically import a diagrams node class."""
-    import importlib
-    mod = importlib.import_module(module_path)
-    return getattr(mod, class_name)
+# Layout constants
+_FIG_W = 16.0          # figure width in inches
+_DPI = 180
+_LAYER_ACCENT_W = 0.18  # width of left color accent bar (data units)
+_LAYER_HPAD = 0.35      # horizontal padding inside layer band
+_LAYER_VPAD = 0.22      # vertical padding top/bottom inside layer band
+_TITLE_H = 0.55         # height of layer title row
+_COMP_W = 2.6           # component card width
+_COMP_H = 1.05          # component card height
+_COMP_GAP_X = 0.22      # horizontal gap between cards
+_COMP_GAP_Y = 0.2       # vertical gap between card rows
+_MAX_PER_ROW = 5        # max cards per row
+_LAYER_GAP = 0.32       # gap between consecutive layer bands
+_ARROW_H = _LAYER_GAP   # arrow height fits in the gap
+_MARGIN = 0.5           # top/bottom figure margin
 
 
 @dataclass
@@ -200,245 +91,239 @@ class DiagramGenerator:
     # ------------------------------------------------------------------
 
     def generate_png(self, result: AnalysisResult, filename: str = "architecture.png") -> str:
-        """Render architecture PNG. Tries diagrams library first, falls back to matplotlib."""
+        """Render a professional horizontal-band architecture PNG."""
         if not result.layers:
             raise ValueError("No layers found in analysis result.")
-        try:
-            return self._generate_with_diagrams(result, filename)
-        except Exception:
-            return self._generate_with_matplotlib(result, filename)
+        return self._render(result, filename)
 
     # ------------------------------------------------------------------
-    # diagrams (mingrammer) renderer
+    # Main renderer
     # ------------------------------------------------------------------
 
-    def _generate_with_diagrams(self, result: AnalysisResult, filename: str) -> str:
-        from diagrams import Diagram, Cluster, Edge  # type: ignore
-
-        output_path = Path(self.output_dir) / filename
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # diagrams saves as <outfilename>.png — strip extension from stem
-        out_stem = str(output_path.with_suffix(""))
-
-        graph_attr = {
-            "bgcolor": "white",
-            "splines": "ortho",
-            "nodesep": "0.6",
-            "ranksep": "0.9",
-            "fontsize": "13",
-            "fontname": "Helvetica",
-            "pad": "0.5",
-        }
-        node_attr = {
-            "fontsize": "11",
-            "fontname": "Helvetica",
-            "labelloc": "b",
-        }
-
-        with Diagram(
-            result.project_name,
-            filename=out_stem,
-            outformat="png",
-            show=False,
-            direction="TB",
-            graph_attr=graph_attr,
-            node_attr=node_attr,
-        ):
-            prev_cluster_nodes: list = []
-
-            for i, layer in enumerate(result.layers):
-                color = layer.get("color") or _CLUSTER_COLORS[i % len(_CLUSTER_COLORS)]
-                components = layer.get("components", [])
-
-                cluster_attr = {
-                    "bgcolor": color + "22",  # very translucent
-                    "style": "rounded",
-                    "color": color,
-                    "penwidth": "2",
-                    "fontcolor": color,
-                    "fontsize": "12",
-                    "fontname": "Helvetica-Bold",
-                }
-
-                layer_nodes: list = []
-                with Cluster(layer["name"], graph_attr=cluster_attr):
-                    if not components:
-                        # placeholder node for empty layers
-                        try:
-                            NodeCls = _import_node("diagrams.onprem.container", "Docker")
-                        except Exception:
-                            NodeCls = None
-                        if NodeCls:
-                            node = NodeCls(layer["name"])
-                            layer_nodes.append(node)
-                    else:
-                        for comp in components:
-                            icon = _resolve_icon(comp)
-                            if icon:
-                                try:
-                                    NodeCls = _import_node(*icon)
-                                    node = NodeCls(comp["name"])
-                                    layer_nodes.append(node)
-                                except Exception:
-                                    pass
-
-                # Connect previous layer to this one
-                if prev_cluster_nodes and layer_nodes:
-                    prev_cluster_nodes[-1] >> Edge(color="#64748b", style="dashed") >> layer_nodes[0]
-
-                prev_cluster_nodes = layer_nodes
-
-        return str(output_path)
-
-    # ------------------------------------------------------------------
-    # matplotlib fallback renderer
-    # ------------------------------------------------------------------
-
-    def _generate_with_matplotlib(self, result: AnalysisResult, filename: str) -> str:
+    def _render(self, result: AnalysisResult, filename: str) -> str:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
         from matplotlib.patches import FancyBboxPatch
 
         layers = result.layers
         n_layers = len(layers)
-        if n_layers == 0:
-            raise ValueError("No layers found in analysis result.")
 
-        # Pre-compute each layer's height based on component count
-        layer_heights = []
+        # ── compute layer heights ──────────────────────────────────────
+        layer_heights: list[float] = []
         for layer in layers:
             n_comps = len(layer.get("components", []))
             n_rows = max(1, math.ceil(n_comps / _MAX_PER_ROW)) if n_comps > 0 else 0
-            if n_rows == 0:
-                h = _TITLE_H + 0.4
-            else:
-                h = _TITLE_H + n_rows * (_COMP_H + _COMP_ROW_GAP) + 0.3
+            cards_h = n_rows * (_COMP_H + _COMP_GAP_Y) - _COMP_GAP_Y if n_rows > 0 else 0
+            h = _LAYER_VPAD + _TITLE_H + (cards_h + _LAYER_VPAD if cards_h else _LAYER_VPAD)
             layer_heights.append(h)
 
-        total_content_h = sum(layer_heights) + (_LAYER_PAD * (n_layers - 1))
-        fig_h = total_content_h + _MARGIN_TOP + 0.5
-
-        fig, ax = plt.subplots(figsize=(_FIG_W, fig_h))
-        ax.set_xlim(0, _FIG_W)
-        ax.set_ylim(0, fig_h)
-        ax.axis("off")
-        fig.patch.set_facecolor(_BG)
-
-        ax.text(
-            _FIG_W / 2, fig_h - 0.15,
-            result.project_name,
-            ha="center", va="top",
-            fontsize=18, fontweight="bold",
-            color=_TEXT, zorder=10,
+        total_h = (
+            sum(layer_heights)
+            + _LAYER_GAP * (n_layers - 1)
+            + 2 * _MARGIN
+            + 0.6  # project title
         )
 
-        y_cursor = fig_h - _MARGIN_TOP
+        fig, ax = plt.subplots(figsize=(_FIG_W, total_h))
+        fig.patch.set_facecolor("#f8fafc")
+        ax.set_facecolor("#f8fafc")
+        ax.set_xlim(0, _FIG_W)
+        ax.set_ylim(0, total_h)
+        ax.axis("off")
+
+        # ── project title ──────────────────────────────────────────────
+        ax.text(
+            _FIG_W / 2, total_h - _MARGIN * 0.6,
+            result.project_name,
+            ha="center", va="top",
+            fontsize=17, fontweight="bold", color="#0f172a",
+            zorder=10,
+        )
+        ax.text(
+            _FIG_W / 2, total_h - _MARGIN * 0.6 - 0.32,
+            "Architecture Overview",
+            ha="center", va="top",
+            fontsize=9, color="#64748b", style="italic",
+            zorder=10,
+        )
+
+        y_top = total_h - _MARGIN - 0.6  # top of first layer band
 
         for i, layer in enumerate(layers):
             lh = layer_heights[i]
-            color = layer.get("color") or _MPL_COLORS[i % len(_MPL_COLORS)]
-            y_bottom = y_cursor - lh
+            accent = layer.get("color") or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+            pastel = _PASTEL[i % len(_PASTEL)]
+            y_bottom = y_top - lh
+            band_x = _LAYER_ACCENT_W
+            band_w = _FIG_W - _LAYER_ACCENT_W
 
-            lpad = 0.25
-            rect = FancyBboxPatch(
-                (lpad, y_bottom), _FIG_W - 2 * lpad, lh,
-                boxstyle="round,pad=0.08",
-                facecolor=color, edgecolor="none", alpha=0.92,
+            # ── layer band background ──────────────────────────────────
+            band = FancyBboxPatch(
+                (0, y_bottom), _FIG_W, lh,
+                boxstyle="round,pad=0.05",
+                facecolor=pastel,
+                edgecolor=accent + "55",
+                linewidth=1.2,
                 zorder=1,
             )
-            ax.add_patch(rect)
+            ax.add_patch(band)
 
+            # left accent bar
+            accent_bar = mpatches.Rectangle(
+                (0, y_bottom), _LAYER_ACCENT_W, lh,
+                facecolor=accent, edgecolor="none", zorder=2,
+            )
+            ax.add_patch(accent_bar)
+
+            # ── layer title ────────────────────────────────────────────
+            title_y = y_top - _LAYER_VPAD - _TITLE_H / 2
             ax.text(
-                0.7, y_cursor - 0.12,
-                layer["name"].upper(),
-                ha="left", va="top",
-                fontsize=11, fontweight="bold",
-                color=_TEXT, zorder=3, alpha=0.95,
+                band_x + _LAYER_HPAD, title_y,
+                layer["name"],
+                ha="left", va="center",
+                fontsize=11, fontweight="bold", color="#0f172a",
+                zorder=4,
             )
 
+            # layer description (right, italic, dimmed)
             desc = layer.get("description", "")
             if desc:
-                short_desc = desc[:90] + ("..." if len(desc) > 90 else "")
+                short = desc[:80] + ("…" if len(desc) > 80 else "")
                 ax.text(
-                    _FIG_W - 0.5, y_cursor - 0.15,
-                    short_desc,
-                    ha="right", va="top",
-                    fontsize=8, style="italic",
-                    color=_SUBTEXT, zorder=3, alpha=0.85,
+                    _FIG_W - 0.3, title_y,
+                    short,
+                    ha="right", va="center",
+                    fontsize=7.5, style="italic", color="#64748b",
+                    zorder=4,
                 )
 
+            # divider line under title
+            div_y = y_top - _LAYER_VPAD - _TITLE_H
+            ax.plot(
+                [band_x + _LAYER_HPAD, _FIG_W - _LAYER_HPAD],
+                [div_y, div_y],
+                color=accent + "55", linewidth=0.8, zorder=3,
+            )
+
+            # ── component cards ────────────────────────────────────────
             components = layer.get("components", [])
             if components:
-                usable_w = _FIG_W - 2 * lpad - 0.4
-                n_per_row = min(len(components), _MAX_PER_ROW)
-                slot_w = usable_w / n_per_row
-                comp_x0 = lpad + 0.2
-                row_y_top = y_cursor - _TITLE_H
+                n_cols = min(len(components), _MAX_PER_ROW)
+                # center cards horizontally within the band
+                total_cards_w = n_cols * _COMP_W + (n_cols - 1) * _COMP_GAP_X
+                x_start = band_x + (band_w - total_cards_w) / 2
+                cards_y_top = div_y - _COMP_GAP_Y
 
                 for j, comp in enumerate(components):
-                    row = j // n_per_row
-                    col = j % n_per_row
-                    cx = comp_x0 + col * slot_w + slot_w / 2
-                    comp_top = row_y_top - row * (_COMP_H + _COMP_ROW_GAP)
-                    comp_bottom = comp_top - _COMP_H
+                    row = j // n_cols
+                    col = j % n_cols
+                    cx = x_start + col * (_COMP_W + _COMP_GAP_X)
+                    cy_top = cards_y_top - row * (_COMP_H + _COMP_GAP_Y)
+                    cy_bottom = cy_top - _COMP_H
 
-                    box_margin = slot_w * 0.06
-                    comp_rect = FancyBboxPatch(
-                        (cx - slot_w / 2 + box_margin, comp_bottom + 0.08),
-                        slot_w - 2 * box_margin, _COMP_H - 0.16,
-                        boxstyle="round,pad=0.06",
-                        facecolor="#ffffff15",
-                        edgecolor="#ffffff40",
-                        linewidth=0.8,
-                        zorder=2,
+                    # card background
+                    card = FancyBboxPatch(
+                        (cx, cy_bottom), _COMP_W, _COMP_H,
+                        boxstyle="round,pad=0.04",
+                        facecolor="white",
+                        edgecolor=accent + "88",
+                        linewidth=1.0,
+                        zorder=3,
                     )
-                    ax.add_patch(comp_rect)
+                    ax.add_patch(card)
 
-                    wrap_w = max(12, int(slot_w * 5.5))
-                    name_lines = textwrap.wrap(comp.get("name", ""), width=wrap_w)[:2]
-                    name_y = (comp_top + comp_bottom) / 2 + 0.28
-                    ax.text(
-                        cx, name_y,
-                        "\n".join(name_lines),
-                        ha="center", va="center",
-                        fontsize=9.5, fontweight="bold",
-                        color=_TEXT, zorder=4, linespacing=1.25,
-                    )
-
-                    tech = comp.get("tech", "")
-                    if tech:
+                    # tech badge (top-right corner of card)
+                    tech_raw = comp.get("tech", "")
+                    abbr = self._tech_abbr(tech_raw)
+                    badge_color = accent
+                    badge_x = cx + _COMP_W - 0.08
+                    badge_y = cy_top - 0.1
+                    if abbr:
+                        badge_rect = FancyBboxPatch(
+                            (badge_x - 0.32, badge_y - 0.22), 0.32, 0.22,
+                            boxstyle="round,pad=0.02",
+                            facecolor=badge_color,
+                            edgecolor="none",
+                            zorder=5,
+                        )
+                        ax.add_patch(badge_rect)
                         ax.text(
-                            cx, comp_bottom + 0.22,
-                            tech[:28],
-                            ha="center", va="bottom",
-                            fontsize=7.5, style="italic",
-                            color=_SUBTEXT, zorder=4,
+                            badge_x - 0.16, badge_y - 0.11,
+                            abbr,
+                            ha="center", va="center",
+                            fontsize=6, fontweight="bold", color="white",
+                            zorder=6,
                         )
 
+                    # component name (centered, bold)
+                    name = comp.get("name", "")
+                    wrap_w = max(14, int(_COMP_W * 8))
+                    name_lines = textwrap.wrap(name, width=wrap_w)[:2]
+                    name_y = (cy_top + cy_bottom) / 2 + 0.1
+                    ax.text(
+                        cx + _COMP_W / 2, name_y,
+                        "\n".join(name_lines),
+                        ha="center", va="center",
+                        fontsize=8.5, fontweight="bold", color="#1e293b",
+                        linespacing=1.3, zorder=4,
+                    )
+
+                    # tech label below name
+                    if tech_raw:
+                        ax.text(
+                            cx + _COMP_W / 2, cy_bottom + 0.14,
+                            tech_raw[:26],
+                            ha="center", va="bottom",
+                            fontsize=7, color="#64748b", style="italic",
+                            zorder=4,
+                        )
+
+            # ── arrow to next layer ────────────────────────────────────
             if i < n_layers - 1:
-                arrow_y = y_bottom
+                arrow_x = _FIG_W / 2
+                arrow_y_start = y_bottom
+                arrow_y_end = y_bottom - _LAYER_GAP
                 ax.annotate(
-                    "", xy=(_FIG_W / 2, arrow_y - _LAYER_PAD + 0.1),
-                    xytext=(_FIG_W / 2, arrow_y),
+                    "",
+                    xy=(arrow_x, arrow_y_end + 0.06),
+                    xytext=(arrow_x, arrow_y_start),
                     arrowprops=dict(
-                        arrowstyle="->, head_width=0.25, head_length=0.12",
-                        color="#64748b", lw=1.8,
+                        arrowstyle="->, head_width=0.22, head_length=0.1",
+                        color="#94a3b8",
+                        lw=1.6,
+                        connectionstyle="arc3,rad=0",
                     ),
                     zorder=5,
                 )
 
-            y_cursor = y_bottom - _LAYER_PAD
+            y_top = y_bottom - _LAYER_GAP
 
         output_path = Path(self.output_dir) / filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(
             str(output_path), dpi=_DPI, bbox_inches="tight",
-            facecolor=fig.get_facecolor(), pad_inches=0.2,
+            facecolor=fig.get_facecolor(), pad_inches=0.25,
         )
         plt.close()
         return str(output_path)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _tech_abbr(self, tech: str) -> str:
+        """Return a 2-char abbreviation for the tech label, or empty string."""
+        if not tech:
+            return ""
+        key = tech.lower().strip()
+        for k, v in _TECH_ABBR.items():
+            if k in key:
+                return v
+        # fallback: first 2 uppercase chars
+        letters = [c for c in tech if c.isalpha()]
+        return "".join(letters[:2]).upper() if letters else ""
 
     # ------------------------------------------------------------------
     # Mermaid generation
@@ -455,7 +340,7 @@ class DiagramGenerator:
             label = layer["name"].replace('"', "'")
             lines.append(f'    {lid}["{label}"]')
 
-            color = layer.get("color") or _CLUSTER_COLORS[i % len(_CLUSTER_COLORS)]
+            color = layer.get("color") or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
             style_lines.append(
                 f"    style {lid} fill:{color},stroke:#ffffff22,color:#ffffff,font-weight:bold"
             )
