@@ -173,6 +173,7 @@
     .download-links a:hover { opacity: 0.82; }
     .download-links a.pdf { background: #6a2d7a; }
     .download-links a.png { background: var(--green); }
+    .download-links a.md  { background: #1a5276; }
 
     /* ── Hero ───────────────────────────────────────────── */
     .hero {
@@ -272,7 +273,7 @@
     </div>
     <div class="hero-pill">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
-      Exporta PDF · DOCX · PNG
+      Exporta PDF · DOCX · PNG · MD
     </div>
     <div class="hero-pill">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -529,9 +530,10 @@
     // Downloads
     const dl = document.getElementById('download-links');
     dl.innerHTML = '';
-    if (data.files?.docx) dl.innerHTML += `<a href="${data.files.docx}" download>⬇ Baixar .docx</a>`;
-    if (data.files?.pdf)  dl.innerHTML += `<a href="${data.files.pdf}" download class="pdf">⬇ Baixar PDF</a>`;
+    if (data.files?.docx)    dl.innerHTML += `<a href="${data.files.docx}" download>⬇ Baixar .docx</a>`;
+    if (data.files?.pdf)     dl.innerHTML += `<a href="${data.files.pdf}" download class="pdf">⬇ Baixar PDF</a>`;
     if (data.files?.diagram) dl.innerHTML += `<a href="${data.files.diagram}" download class="png">⬇ Diagrama PNG</a>`;
+    if (data.files?.md)      dl.innerHTML += `<a href="${data.files.md}" download class="md">⬇ Baixar .md</a>`;
 
     document.getElementById('results').style.display = 'block';
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
