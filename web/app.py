@@ -382,7 +382,7 @@ def create_app() -> FastAPI:
     async def analyze(
         request: Request,
         provider: str = Form(..., max_length=20),
-        api_key: str = Form(..., max_length=512),
+        api_key: str = Form("", max_length=512),
         model: str = Form(..., max_length=100),
         language: str = Form("pt", max_length=5),
         git_url: str = Form(..., max_length=512),
@@ -407,6 +407,12 @@ def create_app() -> FastAPI:
                 detail=f"Limite de requisicoes atingido. Tente novamente em {retry_after} segundos.",
                 headers={"Retry-After": str(retry_after)},
             )
+
+        # Fall back to .env key when form field is blank
+        if not api_key.strip():
+            api_key = os.getenv("LLM_API_KEY", "")
+        if not api_key:
+            raise HTTPException(400, "api_key nao informada e LLM_API_KEY nao configurada no .env")
 
         if provider not in ("openai", "anthropic", "custom"):
             raise HTTPException(400, "provider deve ser openai, anthropic ou custom")
