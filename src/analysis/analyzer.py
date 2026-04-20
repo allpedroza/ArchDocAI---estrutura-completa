@@ -87,6 +87,13 @@ Sua função é analisar projetos de engenharia e produzir:
 2. Um JSON estruturado representando as camadas e componentes (para gerar o diagrama)
 3. Pontos de atenção e boas práticas que o projeto está seguindo ou deveria seguir
 
+PRINCÍPIO DE COESÃO FUNCIONAL (regra mais importante para a estrutura):
+Agrupe componentes pelo PAPEL FUNCIONAL que cumprem no produto, não pela pasta ou arquivo onde estão.
+Tudo que faz a mesma coisa pertence ao mesmo bloco/camada — mesmo que esteja espalhado pelo código.
+Exemplos: todas as chamadas a LLM ficam juntas, todos os geradores de documento ficam juntos,
+todos os clientes de APIs externas ficam juntos, toda a persistência fica junta.
+Se você se pegar criando duas camadas que fazem coisas parecidas, FUNDA-AS em uma só.
+
 Sempre responda em JSON válido quando solicitado. Seja preciso, técnico e objetivo."""
 
 SYSTEM_PROMPT_EN = """You are a senior data and software architect specializing in technical documentation.
@@ -95,10 +102,27 @@ Your role is to analyze engineering projects and produce:
 2. A structured JSON representing layers and components (for diagram generation)
 3. Attention points and best practices the project follows or should follow
 
+FUNCTIONAL COHESION PRINCIPLE (most important rule for structure):
+Group components by the FUNCTIONAL ROLE they play in the product, not by the folder or file they live in.
+Everything that does the same thing belongs in the same block/layer — even if it is scattered across the code.
+Examples: all LLM calls go together, all document generators go together,
+all external API clients go together, all persistence goes together.
+If you find yourself creating two layers that do similar things, MERGE them into one.
+
 Always respond with valid JSON when requested. Be precise, technical, and objective."""
 
 ANALYSIS_SCHEMA = """
 Return a JSON object with this exact structure. Respect ALL limits below — do NOT exceed them.
+
+GROUPING RULES (apply BEFORE counting layers/components):
+- Group by FUNCTIONAL ROLE, not by file path. Files in different folders that do the same job belong in the SAME component or layer.
+- A "layer" represents one functional responsibility of the product (e.g. "LLM Analysis", "Document Generation", "Data Ingestion", "Web Interface"). Never create a layer that just mirrors a folder name.
+- A "component" inside a layer represents one cohesive capability. If two pieces of code call the same external service or produce the same kind of artifact, they should be ONE component, not two.
+- All LLM calls (prompt building, API client, response parsing, retries) → one component or one layer, never split.
+- All output/document generators (PDF, DOCX, Markdown, PNG, JSON for UI) → grouped under one "Output" layer.
+- All external API integrations → grouped together (one per provider, not per call site).
+- Cross-cutting concerns (logging, config, auth) are NOT layers — mention them in description or omit.
+- Before finalizing: re-read your layers. If two layers describe similar responsibilities, MERGE them.
 
 STRICT LIMITS:
 - description: exactly 2-3 sentences, no more
