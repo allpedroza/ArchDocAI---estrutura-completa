@@ -177,7 +177,7 @@ O servidor sobe em `http://localhost:8080`
 Para usar uma porta diferente:
 
 ```bash
-python cli.py serve --port 3000
+python cli.py serve--port 3000
 ```
 
 ### 2. Acessar a interface
@@ -194,7 +194,7 @@ http://localhost:8080
 2. Informe o **modelo** (`gpt-4o`, `claude-sonnet-4-6`, etc.)
 3. Cole sua **API Key**
 4. Informe a **URL do repositorio Git** que deseja analisar
-5. Informe a **branch** (opcional, padrao e `main`)
+5. Informe a  **branch** (opcional, padrao e `main`)
 6. Clique em **Analisar Arquitetura**
 7. Aguarde a analise (entre 30 e 60 segundos dependendo do projeto)
 8. Valide o entendimento do AI respondendo as perguntas exibidas
